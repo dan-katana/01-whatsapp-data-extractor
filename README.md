@@ -1,4 +1,4 @@
-# 🌱 ELRF WhatsApp Monitoring Data Extractor
+# ELRF WhatsApp Monitoring Data Extractor
 
 ## Data Extraction + Automation
 
@@ -6,7 +6,7 @@ A Python and Streamlit-based data extraction system designed to convert unstruct
 
 ---
 
-## 📌 Project Overview
+## Project Overview
 
 Field monitoring teams often submit restoration and survival monitoring information through WhatsApp messages.
 
@@ -43,7 +43,7 @@ Analysis & Reporting
 
 ---
 
-## 🎯 Objectives
+## Objectives
 
 The system was developed to:
 
@@ -59,7 +59,7 @@ The system was developed to:
 
 ---
 
-## ⚙️ Key Features
+## Key Features
 
 ### 1. WhatsApp Report Extraction
 
