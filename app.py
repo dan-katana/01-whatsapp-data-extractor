@@ -696,6 +696,74 @@ def extract_general_information(text):
 
 
 # ============================================================
+# SESSION / CHECK-SPECIFIC OBSERVATIONS
+# ============================================================
+
+def _ordinal_to_int(value):
+    mapping = {
+        "1": 1, "1st": 1,
+        "2": 2, "2nd": 2,
+        "3": 3, "3rd": 3,
+        "4": 4, "4th": 4,
+        "5": 5, "5th": 5,
+        "6": 6, "6th": 6,
+        "7": 7, "7th": 7,
+        "8": 8, "8th": 8,
+        "9": 9, "9th": 9,
+        "10": 10, "10th": 10,
+    }
+    return mapping.get(str(value).lower())
+
+
+def extract_session_observations(text):
+    """Extract observations explicitly associated with a session/check.
+
+    Supports both common styles:
+      - ``Session 1's polygon ...``
+      - ``... in the 1st session. ... in the 2nd session.``
+
+    Only sentences that explicitly contain a session number are assigned.
+    Unlabelled text is left to the existing report-level Comment behavior.
+    """
+    result = {}
+    if not text:
+        return result
+
+    block_match = re.search(
+        r"^\s*(?:General\s+Observation|Observation)\s*:?[ \t]*\n?(.*?)(?=^\s*Recommendation\b|\Z)",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    if not block_match:
+        return result
+
+    block = clean_text(block_match.group(1))
+    if not block:
+        return result
+
+    # Split on sentence boundaries, including WhatsApp text where the next
+    # sentence starts immediately after the period (``session.Growth``).
+    sentences = re.split(r"(?<=[.!?])\s*", block)
+    for sentence in sentences:
+        sentence = clean_text(sentence)
+        if not sentence:
+            continue
+
+        match = re.search(
+            r"\bSession\s*(\d+)\b|\b(\d+)(?:st|nd|rd|th)\s+session\b",
+            sentence,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            continue
+
+        number = int(match.group(1) or match.group(2))
+        result[number] = sentence
+
+    return result
+
+
+# ============================================================
 # CHECK NUMBER
 # ============================================================
 
@@ -1053,138 +1121,79 @@ def extract_disturbance(text):
 # ============================================================
 
 def parse_coordinates(text):
+    """Extract a coordinate pair without silently truncating malformed values.
 
-    # --------------------------------------------------------
-    # latitude / longitude format
-    # --------------------------------------------------------
+    Important safety rule:
+    If a line such as ``Coordinates:-2.68,40.40.193`` contains a malformed
+    longitude/latitude, the function returns (None, None) instead of accepting
+    the valid-looking prefix ``40.40``. This keeps bad GPS data visible for
+    manual correction.
+    """
+    if not text:
+        return None, None
 
-    lat_match = re.search(
-        r"\blat(?:itude)?\s*:?\s*"
-        r"(-?\d+(?:\.\d+)?)",
-
+    # First handle an explicit Coordinates line. Validate the entire pair so
+    # malformed decimal values are not silently truncated by a regex prefix.
+    coordinate_line = re.search(
+        r"^\s*Coordinates?\s*:?\s*(.+?)\s*$",
         text,
-        re.IGNORECASE
+        flags=re.IGNORECASE | re.MULTILINE,
     )
+    if coordinate_line:
+        raw = coordinate_line.group(1).strip()
+        parts = re.split(r"\s*,\s*", raw)
+        if len(parts) >= 2:
+            lat_raw = parts[0].strip()
+            lon_raw = parts[1].strip()
+            number_pattern = r"^-?\d+(?:\.\d+)?$"
+            if re.fullmatch(number_pattern, lat_raw) and re.fullmatch(number_pattern, lon_raw):
+                return float(lat_raw), float(lon_raw)
+            # A malformed explicit coordinate pair must not fall through to
+            # the generic prefix-matching patterns below.
+            return None, None
 
-    lon_match = re.search(
-        r"\blong(?:itude)?\s*:?\s*"
-        r"(-?\d+(?:\.\d+)?)",
-
+    # latitude / longitude format
+    lat_match = re.search(
+        r"\blat(?:itude)?\s*:?\s*(-?\d+(?:\.\d+)?)",
         text,
-        re.IGNORECASE
+        re.IGNORECASE,
+    )
+    lon_match = re.search(
+        r"\blong(?:itude)?\s*:?\s*(-?\d+(?:\.\d+)?)",
+        text,
+        re.IGNORECASE,
     )
 
     if lat_match and lon_match:
+        return float(lat_match.group(1)), float(lon_match.group(1))
 
-        return (
-            float(
-                lat_match.group(1)
-            ),
-            float(
-                lon_match.group(1)
-            )
-        )
-
-    # --------------------------------------------------------
-    # Fallback: "Coordinates:" is followed directly by a bare
-    # latitude value with no "lat" keyword, while "Long"/"Longitude"
-    # is given separately (and did match above), e.g.:
-    #
-    #   Coordinates:-3.98086
-    #   Long : 39.66109
-    #
-    # Without this, the pair is dropped even though the longitude
-    # was already found, because both lat_match and lon_match are
-    # required above.
-    # --------------------------------------------------------
-
+    # Fallback for separate bare Coordinates + Long/Longitude formats.
     if lon_match and not lat_match:
-
         bare_lat_match = re.search(
             r"^\s*Coordinates?\s*:?\s*(-?\d+\.\d+)\s*$",
             text,
-            flags=re.IGNORECASE | re.MULTILINE
+            flags=re.IGNORECASE | re.MULTILINE,
         )
-
         if bare_lat_match:
-
-            return (
-                float(
-                    bare_lat_match.group(1)
-                ),
-                float(
-                    lon_match.group(1)
-                )
-            )
-
-    # Symmetric case: bare longitude after "Coordinates:" with no
-    # "long" keyword, while latitude was found via the "lat" keyword.
+            return float(bare_lat_match.group(1)), float(lon_match.group(1))
 
     if lat_match and not lon_match:
-
         bare_lon_match = re.search(
             r"^\s*Coordinates?\s*:?\s*(-?\d+\.\d+)\s*$",
             text,
-            flags=re.IGNORECASE | re.MULTILINE
+            flags=re.IGNORECASE | re.MULTILINE,
         )
+        if bare_lon_match and bare_lon_match.group(1) != lat_match.group(1):
+            return float(lat_match.group(1)), float(bare_lon_match.group(1))
 
-        if bare_lon_match and (
-            bare_lon_match.group(1) != lat_match.group(1)
-        ):
-
-            return (
-                float(
-                    lat_match.group(1)
-                ),
-                float(
-                    bare_lon_match.group(1)
-                )
-            )
-
-    # --------------------------------------------------------
-    # Coordinates: lat, long
-    # --------------------------------------------------------
-
-    patterns = [
-
-        r"Coordinates\s*:?\s*"
-        r"(-?\d+(?:\.\d+)?)"
-        r"\s*,\s*"
-        r"(-?\d+(?:\.\d+)?)",
-
-        r"Coordinates\s*:?\s*"
-        r"(-?\d+(?:\.\d+)?)"
-        r"\s+"
-        r"(-?\d+(?:\.\d+)?)",
-
-        # Bare coordinate line
-        r"^\s*"
-        r"(-?\d+\.\d+)"
-        r"\s*,\s*"
-        r"(-?\d+\.\d+)\s*$"
-    ]
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            text,
-            flags=(
-                re.IGNORECASE
-                | re.MULTILINE
-            )
-        )
-
-        if match:
-
-            return (
-                float(
-                    match.group(1)
-                ),
-                float(
-                    match.group(2)
-                )
-            )
+    # Bare coordinate line without the Coordinates label.
+    bare_pair = re.search(
+        r"^\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*$",
+        text,
+        flags=re.MULTILINE,
+    )
+    if bare_pair:
+        return float(bare_pair.group(1)), float(bare_pair.group(2))
 
     return None, None
 
@@ -1193,20 +1202,30 @@ def parse_coordinates(text):
 # PLOT TYPE
 # ============================================================
 
-def extract_plot_type(
-    plot_header
-):
+def extract_plot_type(plot_header, context_text=None, report_text=None):
+    """Determine plot type using plot-level text first, then session context.
 
-    if not plot_header:
+    Existing behavior is preserved for explicit headers such as
+    ``Plot 2: Temporary Plot``. The new context fallback handles reports that
+    declare ``2.5m radius Temporary Plots establishment`` once for a Check or
+    session and then use plain ``Plot 1``, ``Plot 2`` headers.
+    """
+    header = plot_header or ""
+    if re.search(r"\btemporary\b", header, re.IGNORECASE):
+        return "Temporary"
 
-        return "Monitoring Plot"
+    context = context_text or ""
+    if re.search(r"\btemporary\s+plots?\b", context, re.IGNORECASE):
+        return "Temporary"
 
-    if re.search(
-        r"\btemporary\b",
-        plot_header,
-        re.IGNORECASE
+    # Report-level establishment statement, normally before the first Check.
+    # Only use it when it explicitly says Temporary Plot(s), so unrelated
+    # uses of the word temporary are not promoted to a plot type.
+    if report_text and re.search(
+        r"(?:radius\s+)?temporary\s+plots?\s+establishment",
+        report_text,
+        re.IGNORECASE,
     ):
-
         return "Temporary"
 
     return "Monitoring Plot"
@@ -1436,7 +1455,7 @@ def extract_dormant(text):
     for value in matches:
 
         numbers = re.findall(
-            r"\d[\d,]*",
+            r"\d[\d,]*(?:\.\d+)?",
             value
         )
 
@@ -1449,9 +1468,7 @@ def extract_dormant(text):
         return None
 
     return sum(
-        int(
-            x.replace(",", "")
-        )
+        float(x.replace(",", ""))
         for x in values
     )
 
@@ -1509,31 +1526,36 @@ def split_into_planting_blocks(text):
 # ============================================================
 
 def split_into_plots(text):
-    """Split the entire report into real plot sections.
+    """Split a report into plot sections without crossing Check/Session boundaries.
 
-    This is deliberately independent of the Monitoring line.  A plot may be
-    written as:
-
-      Plot 1: CHECK 1 (VT)
-      Monitoring 11th February 2026 planting.
-
-    or:
-
-      Plot 1:Temporary plot
-      Monitoring of 28th Feb 2025 (ID:9747)
-
-    or the older formats where monitoring information appears before Plot 1.
+    The previous parser ended a plot only at the next Plot header. In reports
+    where the next session's metadata appears between Plot 3 and the next Plot
+    1, that metadata became part of Plot 3. We now stop a plot at the earliest
+    of the next Plot header, next Check header, or next Session header.
     """
     anchor = re.compile(
         r"^\s*(?:Plot\s*:??\s*|Temporary\s+Plot\s*:??\s*)(\d+)\s*:?[ \t]*(.*)$",
-        flags=re.IGNORECASE | re.MULTILINE
+        flags=re.IGNORECASE | re.MULTILINE,
     )
+    boundary = re.compile(
+        r"^\s*(?:Check\s*\d+\b|Session\s*\d+\b|Session\s*:\s*\d+\b).*?$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
     matches = list(anchor.finditer(text))
+    boundaries = list(boundary.finditer(text))
     plots = []
 
     for i, match in enumerate(matches):
         start_pos = match.start()
-        end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        next_plot_pos = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+
+        next_boundary_pos = len(text)
+        for b in boundaries:
+            if b.start() > start_pos and b.start() < next_boundary_pos:
+                next_boundary_pos = b.start()
+
+        end_pos = min(next_plot_pos, next_boundary_pos)
         section = text[start_pos:end_pos].strip()
         header = match.group(2).strip() or None
         plots.append({
@@ -1629,7 +1651,11 @@ def create_record(
     plot_header,
     general_info,
     block_info,
-    check_number
+    check_number,
+    context_text="",
+    session_number=None,
+    report_text="",
+    session_observations=None
 ):
     """Create one monitoring-plot record.
 
@@ -1659,7 +1685,11 @@ def create_record(
     plot_check = extract_check_number(plot_header or "")
     row["Check"] = plot_check if plot_check is not None else check_number
     row["plot_number"] = plot_number
-    row["type_of_plot"] = extract_plot_type(plot_header)
+    row["type_of_plot"] = extract_plot_type(
+        plot_header,
+        context_text=context_text,
+        report_text=report_text
+    )
     row["partner"] = extract_partner(plot_text) or extract_partner(block_info.get("context_text", ""))
 
     # --------------------------------------------------------
@@ -1716,7 +1746,15 @@ def create_record(
         row["monitoring_date"]
     )
     row["Recommendation"] = general_info["recommendation"]
-    row["Comment"] = general_info["observation"]
+
+    # Prefer a session/check-specific observation when the report explicitly
+    # labels it (e.g. "1st session ..." / "Session 2 ..."). Otherwise keep
+    # the existing report-level observation behavior.
+    observation_key = session_number if session_number in (session_observations or {}) else check_number
+    if session_observations and observation_key in session_observations:
+        row["Comment"] = session_observations[observation_key]
+    else:
+        row["Comment"] = general_info["observation"]
 
     return row
 
@@ -1792,47 +1830,34 @@ def _metadata_for_plot(text, plot):
 def parse_report(text):
     """Parse a WhatsApp report into one row per monitoring plot.
 
-    The parser is deliberately plot-first. This is essential for reports
-    such as Kuchi where one Check contains multiple planting sessions:
-
-        Plot 1 -> 11 Feb 2026 -> Session 18194
-        Plot 5 -> 16 Feb 2026 -> Session 18272
-        Plot 6 -> 18 Feb 2026 -> Session 18354
-        Plot 9 -> 31 Jul 2023 -> Session 848
-
-    We must never let the first session found in the Check context override
-    the planting information written inside the current plot.
+    Maintains the existing plot-first extraction strategy while making the
+    context explicitly Check/Session aware. Plot-local information always wins;
+    context only fills missing fields.
     """
-
     text = clean_text(text)
     general_info = extract_general_information(text)
+    session_observations = extract_session_observations(text)
     rows = []
 
-    # --------------------------------------------------------
-    # Find all Check headers. They are used only for inheritance
-    # when a report places planting information before Plot 1.
-    # --------------------------------------------------------
     check_matches = list(re.finditer(
         r"^\s*Check\s*(\d+).*?$",
         text,
-        flags=re.IGNORECASE | re.MULTILINE
+        flags=re.IGNORECASE | re.MULTILINE,
+    ))
+    session_matches = list(re.finditer(
+        r"^\s*Session\s*(\d+)\b.*?$",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
     ))
 
-    # --------------------------------------------------------
-    # Split the ENTIRE report into plots.
-    # Do not split the report into Monitoring blocks first: in Kuchi,
-    # every plot contains its own Monitoring date and Session ID.
-    # --------------------------------------------------------
     plots = split_into_plots(text)
-
     if not plots:
         return pd.DataFrame(columns=COLUMNS)
 
     def context_for_position(position):
-        """Return text before the current plot within its current Check."""
+        """Return metadata before the plot within its current Check."""
         context_start = 0
         current_check = None
-
         for match in check_matches:
             if match.start() <= position:
                 context_start = match.start()
@@ -1840,13 +1865,20 @@ def parse_report(text):
             else:
                 break
 
-        return text[context_start:position], current_check
+        current_session = None
+        for match in session_matches:
+            if match.start() <= position:
+                current_session = int(match.group(1))
+            else:
+                break
+
+        return text[context_start:position], current_check, current_session
 
     for plot in plots:
         plot_text = plot["plot_text"]
-        plot_position = text.find(plot_text)
+        plot_position = plot["start"]
+        context_text, current_check, current_session = context_for_position(plot_position)
 
-        context_text, current_check = context_for_position(plot_position)
         context_info = extract_block_information(context_text)
         context_info["context_text"] = context_text
 
@@ -1856,7 +1888,11 @@ def parse_report(text):
             plot_header=plot["plot_header"],
             general_info=general_info,
             block_info=context_info,
-            check_number=current_check
+            check_number=current_check,
+            session_number=current_session,
+            context_text=context_text,
+            report_text=text,
+            session_observations=session_observations,
         )
         rows.append(row)
 
@@ -2072,6 +2108,9 @@ with st.sidebar:
   are kept together even when the ID line appears
   after them in the report.
 - Planting information is inherited by plots.
+- Session/Check-level "Temporary Plots establishment" is inherited by plots that do not explicitly state their plot type.
+- Plot sections stop at the next Check/Session boundary to prevent metadata from leaking into the previous plot.
+- Malformed coordinate pairs are not silently truncated; invalid pairs are left blank for correction.
 - `Alive` alone = **Replanted Alive**.
 - `Total live trees` alone = **Replanted Alive**.
 - `Total alive` alone = **Replanted Alive**.
