@@ -21,6 +21,7 @@ st.set_page_config(
 
 COLUMNS = [
     "County",
+    "Country",
     "planting_site",
     "Check",
     "type_of_plot",
@@ -583,184 +584,79 @@ def extract_planting_material(text):
 # ============================================================
 
 def extract_general_information(text):
+    """Extract report-level information.
 
+    Report-level fields such as Site, County/Country, Forest type and the
+    report Date are intentionally extracted from the complete report, while
+    planting dates are extracted separately from each planting/monitoring
+    session.
+    """
     site = find_value(
         text,
         r"^\s*Site\s*:?\s*(.+)$",
-        flags=(
-            re.IGNORECASE
-            | re.MULTILINE
-        )
+        flags=re.IGNORECASE | re.MULTILINE,
     )
 
     county = find_value(
         text,
         r"^\s*County\s*:?\s*(.+)$",
-        flags=(
-            re.IGNORECASE
-            | re.MULTILINE
-        )
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    # Newer reports may use Country instead of County.
+    country = find_value(
+        text,
+        r"^\s*Country\s*:?\s*(.+)$",
+        flags=re.IGNORECASE | re.MULTILINE,
     )
 
     forest_type = find_value(
         text,
         r"^\s*Forest\s+type\s*:?\s*(.+)$",
-        flags=(
-            re.IGNORECASE
-            | re.MULTILINE
-        )
+        flags=re.IGNORECASE | re.MULTILINE,
     )
 
     # --------------------------------------------------------
     # Report / monitoring date
-    #
-    # Example:
-    # Date: 17/08/2026
     # --------------------------------------------------------
-
     monitoring_date_text = find_value(
         text,
         r"^\s*Date\s*:?\s*"
-        r"(\d{1,2}"
-        r"(?:st|nd|rd|th)?"
-        r"[\/\-]\d{1,2}"
-        r"[\/\-]\d{2,4})",
-
-        flags=(
-            re.IGNORECASE
-            | re.MULTILINE
-        )
+        r"(\d{1,2}(?:st|nd|rd|th)?[\/-]\d{1,2}[\/-]\d{2,4})",
+        flags=re.IGNORECASE | re.MULTILINE,
     )
 
     if not monitoring_date_text:
-
         monitoring_date_text = find_value(
             text,
             r"^\s*Date\s*:?\s*"
-            r"(\d{1,2}"
-            r"(?:st|nd|rd|th)?"
-            r"\s+[A-Za-z]+"
-            r"(?:,\s*|\s+)"
-            r"\d{4})",
-
-            flags=(
-                re.IGNORECASE
-                | re.MULTILINE
-            )
+            r"(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:,\s*|\s+)\d{4})",
+            flags=re.IGNORECASE | re.MULTILINE,
         )
 
-    monitoring_date = parse_date(
-        monitoring_date_text
-    )
+    monitoring_date = parse_date(monitoring_date_text)
 
     observation = find_value(
         text,
-        r"^\s*(?:General\s+Observation|Observation)"
-        r"\s*:?\s*(.+)$",
-        flags=(
-            re.IGNORECASE
-            | re.MULTILINE
-        )
+        r"^\s*(?:General\s+Observation|Observation)\s*:?[ \t]*(.+)$",
+        flags=re.IGNORECASE | re.MULTILINE,
     )
 
     recommendation = find_value(
         text,
-        r"^\s*Recommendation"
-        r"\s*:?\s*(.+)$",
-        flags=(
-            re.IGNORECASE
-            | re.MULTILINE
-        )
+        r"^\s*Recommendation\s*:?[ \t]*(.+)$",
+        flags=re.IGNORECASE | re.MULTILINE,
     )
 
     return {
-
-        "site":
-            site,
-
-        "county":
-            county,
-
-        "forest_type":
-            forest_type,
-
-        "monitoring_date":
-            monitoring_date,
-
-        "observation":
-            observation,
-
-        "recommendation":
-            recommendation
+        "site": site,
+        "county": county,
+        "country": country,
+        "forest_type": forest_type,
+        "monitoring_date": monitoring_date,
+        "observation": observation,
+        "recommendation": recommendation,
     }
-
-
-# ============================================================
-# SESSION / CHECK-SPECIFIC OBSERVATIONS
-# ============================================================
-
-def _ordinal_to_int(value):
-    mapping = {
-        "1": 1, "1st": 1,
-        "2": 2, "2nd": 2,
-        "3": 3, "3rd": 3,
-        "4": 4, "4th": 4,
-        "5": 5, "5th": 5,
-        "6": 6, "6th": 6,
-        "7": 7, "7th": 7,
-        "8": 8, "8th": 8,
-        "9": 9, "9th": 9,
-        "10": 10, "10th": 10,
-    }
-    return mapping.get(str(value).lower())
-
-
-def extract_session_observations(text):
-    """Extract observations explicitly associated with a session/check.
-
-    Supports both common styles:
-      - ``Session 1's polygon ...``
-      - ``... in the 1st session. ... in the 2nd session.``
-
-    Only sentences that explicitly contain a session number are assigned.
-    Unlabelled text is left to the existing report-level Comment behavior.
-    """
-    result = {}
-    if not text:
-        return result
-
-    block_match = re.search(
-        r"^\s*(?:General\s+Observation|Observation)\s*:?[ \t]*\n?(.*?)(?=^\s*Recommendation\b|\Z)",
-        text,
-        flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
-    )
-    if not block_match:
-        return result
-
-    block = clean_text(block_match.group(1))
-    if not block:
-        return result
-
-    # Split on sentence boundaries, including WhatsApp text where the next
-    # sentence starts immediately after the period (``session.Growth``).
-    sentences = re.split(r"(?<=[.!?])\s*", block)
-    for sentence in sentences:
-        sentence = clean_text(sentence)
-        if not sentence:
-            continue
-
-        match = re.search(
-            r"\bSession\s*(\d+)\b|\b(\d+)(?:st|nd|rd|th)\s+session\b",
-            sentence,
-            flags=re.IGNORECASE,
-        )
-        if not match:
-            continue
-
-        number = int(match.group(1) or match.group(2))
-        result[number] = sentence
-
-    return result
 
 
 # ============================================================
@@ -814,89 +710,227 @@ def extract_check_number(text):
 # ============================================================
 
 def extract_planting_date(text):
-    """Extract the planting date from the SMALLEST available context.
 
-    Priority:
-      1. Explicit Planting date / Date planted inside the supplied text.
-      2. Monitoring <date> planting inside the supplied text.
-      3. Monitoring of <date> planting inside the supplied text.
-      4. Monitoring <month> <year> planting.
-
-    This function intentionally uses the first matching planting-date
-    statement in the supplied plot/context only.  The parser never passes
-    the entire report here when processing a Kuchi plot.
-    """
-    if not text:
-        return None
+    # --------------------------------------------------------
+    # Direct planting date
+    # --------------------------------------------------------
 
     patterns = [
-        r"^\s*(?:[-•*]\s*)?Planting\s+date\s*:?\s*(\d{1,2}/\d{1,2}/\d{2,4})",
-        r"^\s*(?:[-•*]\s*)?Planting\s+date\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:,\s*|\s+)\d{4})",
-        r"^\s*(?:[-•*]\s*)?Date\s+planted\s*:?\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:,\s*|\s+)\d{4})",
-        r"^\s*(?:[-•*]\s*)?Date\s+planted\s*:?\s*(\d{1,2}/\d{1,2}/\d{2,4})",
+
+        # Planting date: 17/10/24
+        r"^\s*(?:[-•*]\s*)?"
+        r"Planting\s+date\s*:?\s*"
+        r"(\d{1,2}/\d{1,2}/\d{2,4})",
+
+        # Planting date: 18th May 2026
+        r"^\s*(?:[-•*]\s*)?"
+        r"Planting\s+date\s*:?\s*"
+        r"(\d{1,2}"
+        r"(?:st|nd|rd|th)?"
+        r"\s+[A-Za-z]+"
+        r"(?:,\s*|\s+)"
+        r"\d{4})",
+
+        # Date planted: 21st May 2026
+        r"^\s*(?:[-•*]\s*)?"
+        r"Date\s+planted\s*:?\s*"
+        r"(\d{1,2}"
+        r"(?:st|nd|rd|th)?"
+        r"\s+[A-Za-z]+"
+        r"(?:,\s*|\s+)"
+        r"\d{4})",
+
+        # Date planted: 21/05/2026
+        r"^\s*(?:[-•*]\s*)?"
+        r"Date\s+planted\s*:?\s*"
+        r"(\d{1,2}/\d{1,2}/\d{2,4})"
     ]
+
     for pattern in patterns:
-        m = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
-        if m:
-            parsed = parse_date(m.group(1))
+
+        value = find_value(
+            text,
+            pattern,
+            flags=(
+                re.IGNORECASE
+                | re.MULTILINE
+            )
+        )
+
+        if value:
+
+            parsed = parse_date(
+                value
+            )
+
             if parsed:
                 return parsed
 
-    monitoring_patterns = [
-        r"^\s*(?:\d+[.)]\s*)?Monitoring\s+(?:of\s+)?(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:,\s*|\s+)\d{4})(?:\s+planting)?",
-        r"^\s*(?:\d+[.)]\s*)?Monitoring\s+(?:of\s+)?(\d{1,2}/\d{1,2}/\d{2,4})(?:\s+planting)?",
-    ]
-    for pattern in monitoring_patterns:
-        m = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
-        if m:
-            parsed = parse_date(m.group(1))
-            if parsed:
-                return parsed
+    # --------------------------------------------------------
+    # Monitoring of 11th December 2024 planting
+    #
+    # Also:
+    #
+    # 1. Monitoring of 11th December 2024 planting
+    # Check 3
+    # 1. Monitoring of 14th April 2025 planting
+    # --------------------------------------------------------
 
-    m = re.search(
-        r"^\s*(?:\d+[.)]\s*)?Monitoring\s+([A-Za-z]+)\s+(\d{4})\s+planting",
-        text, flags=re.IGNORECASE | re.MULTILINE
+    long_date_pattern = re.compile(
+        r"^\s*(?:\d+[\.\)]\s*)?"
+        r"Monitoring\s+(?:of\s+)?"
+        r"(\d{1,2}"
+        r"(?:st|nd|rd|th)?"
+        r"\s+[A-Za-z]+"
+        r"(?:,\s*|\s+)"
+        r"\d{4})"
+        r"(?:\s+planting)?",
+
+        flags=(
+            re.IGNORECASE
+            | re.MULTILINE
+        )
     )
-    if m:
-        for fmt in ("%d %B %Y", "%d %b %Y"):
+
+    match = long_date_pattern.search(
+        text
+    )
+
+    if match:
+
+        parsed = parse_date(
+            match.group(1)
+        )
+
+        if parsed:
+
+            return parsed
+
+    # --------------------------------------------------------
+    # Monitoring of 14/04/2025 planting
+    # --------------------------------------------------------
+
+    numeric_pattern = re.compile(
+        r"^\s*(?:\d+[\.\)]\s*)?"
+        r"Monitoring\s+(?:of\s+)?"
+        r"(\d{1,2}/\d{1,2}/\d{2,4})"
+        r"(?:\s+planting)?",
+
+        flags=(
+            re.IGNORECASE
+            | re.MULTILINE
+        )
+    )
+
+    match = numeric_pattern.search(
+        text
+    )
+
+    if match:
+
+        parsed = parse_date(
+            match.group(1)
+        )
+
+        if parsed:
+
+            return parsed
+
+    # --------------------------------------------------------
+    # UNLABELED PLANTING DATE
+    # --------------------------------------------------------
+    # Some WhatsApp reports use:
+    #
+    # Monitoring 2024 planting
+    # ID :8712
+    # P.A : N.A
+    # 16/12/2024
+    #
+    # The date is the planting date even though it has no label.
+    # IMPORTANT: this is intentionally evaluated on the CURRENT PLOT
+    # TEXT, not the entire report, so the report date (e.g. 31/08/2026)
+    # is never accidentally assigned to the planting session.
+    #
+    # Also supports standalone dates written as 16-12-2024 or 16.12.2024.
+    # --------------------------------------------------------
+
+    unlabeled_numeric_patterns = [
+        r"^\s*(?:[-•*]\s*)?(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*$",
+        r"^\s*(?:[-•*]\s*)?(\d{1,2}\.\d{1,2}\.\d{2,4})\s*$",
+    ]
+
+    for pattern in unlabeled_numeric_patterns:
+
+        for match in re.finditer(
+            pattern,
+            text,
+            flags=re.IGNORECASE | re.MULTILINE
+        ):
+            parsed = parse_date(match.group(1))
+            if parsed:
+                return parsed
+
+    # --------------------------------------------------------
+    # UNLABELED LONG-FORM PLANTING DATE
+    # --------------------------------------------------------
+    # Example: 16th December 2024 on its own line.
+    # --------------------------------------------------------
+
+    unlabeled_long_pattern = re.compile(
+        r"^\s*(?:[-•*]\s*)?"
+        r"(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:,\s*|\s+)\d{4})\s*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    match = unlabeled_long_pattern.search(text)
+    if match:
+        parsed = parse_date(match.group(1))
+        if parsed:
+            return parsed
+
+    # --------------------------------------------------------
+    # Monitoring May 2026 planting
+    # --------------------------------------------------------
+
+    month_year_pattern = re.compile(
+        r"^\s*(?:\d+[\.\)]\s*)?"
+        r"Monitoring\s+"
+        r"([A-Za-z]+)\s+(\d{4})"
+        r"\s+planting",
+
+        flags=(
+            re.IGNORECASE
+            | re.MULTILINE
+        )
+    )
+
+    match = month_year_pattern.search(
+        text
+    )
+
+    if match:
+
+        month = match.group(1)
+        year = match.group(2)
+
+        try:
+
+            return datetime.strptime(
+                f"1 {month} {year}",
+                "%d %B %Y"
+            ).date()
+
+        except ValueError:
+
             try:
-                return datetime.strptime(f"1 {m.group(1)} {m.group(2)}", fmt).date()
+
+                return datetime.strptime(
+                    f"1 {month} {year}",
+                    "%d %b %Y"
+                ).date()
+
             except ValueError:
                 pass
-
-    # Fallback: a standalone planting date written on its own line with
-    # no explicit "Planting date" / "Date planted" / "Monitoring" label.
-    # Some reports simply list the date (e.g. "03/06/2025") right under
-    # the plot's ID / P.A lines:
-    #
-    #   Plot 1:
-    #   Monitoring 2025 planting.
-    #   ID:11462
-    #   P.A :0.2576ha
-    #   03/06/2025
-    #   Trees species planted :C.tagal
-    #
-    # This is safe to use as the planting date here because plot_text is
-    # always a single plot's own section (see split_into_plots) and never
-    # includes the report header where the overall monitoring "Date:"
-    # line lives, so it cannot be confused with the report/monitoring date.
-    m = re.search(
-        r"^\s*(\d{1,2}/\d{1,2}/\d{2,4})\s*$",
-        text, flags=re.MULTILINE
-    )
-    if m:
-        parsed = parse_date(m.group(1))
-        if parsed:
-            return parsed
-
-    m = re.search(
-        r"^\s*(\d{1,2}-\d{1,2}-\d{2,4})\s*$",
-        text, flags=re.MULTILINE
-    )
-    if m:
-        parsed = parse_date(m.group(1))
-        if parsed:
-            return parsed
 
     return None
 
@@ -906,28 +940,47 @@ def extract_planting_date(text):
 # ============================================================
 
 def extract_planting_id(text):
-    """Extract planting/session ID from the supplied plot/context only."""
-    if not text:
-        return None
 
     patterns = [
-        r"^\s*Planting\s+ID\s*:?\s*(\d+)",
-        r"^\s*Planted\s+Session\s+ID\s*:?\s*(\d+)",
-        r"^\s*Session\s+ID\s*:?\s*(\d+)",
-        r"^\s*ID\s*:?\s*(\d+)",
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
-        if m:
-            return m.group(1)
 
-    # Kadzuhoni-style: Monitoring ... (ID:9747)
-    m = re.search(
-        r"^\s*Monitoring\b[^\n]*?\(\s*ID\s*:\s*(\d+)\s*\)",
-        text, flags=re.IGNORECASE | re.MULTILINE
+        # Planting ID: 21330
+        r"^\s*Planting\s+ID\s*:?\s*(\d+)",
+
+        # Planted Session ID: 8670
+        r"^\s*Planted\s+Session\s+ID\s*:?\s*(\d+)",
+
+        # Session ID: 8670
+        r"^\s*Session\s+ID\s*:?\s*(\d+)",
+
+        # ID: 8670
+        r"^\s*ID\s*:?\s*(\d+)"
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            flags=(
+                re.IGNORECASE
+                | re.MULTILINE
+            )
+        )
+
+        if match:
+
+            return match.group(1)
+
+    # Monitoring lines sometimes carry the planting ID in brackets,
+    # e.g. "Monitoring of 28th Feb 2025 (ID:9747)".
+    match = re.search(
+        r"\bMonitoring\b[^\n]*?\(\s*ID\s*:\s*(\d+)",
+        text,
+        flags=re.IGNORECASE,
     )
-    if m:
-        return m.group(1)
+    if match:
+        return match.group(1)
+
     return None
 
 
@@ -1121,79 +1174,82 @@ def extract_disturbance(text):
 # ============================================================
 
 def parse_coordinates(text):
-    """Extract a coordinate pair without silently truncating malformed values.
 
-    Important safety rule:
-    If a line such as ``Coordinates:-2.68,40.40.193`` contains a malformed
-    longitude/latitude, the function returns (None, None) instead of accepting
-    the valid-looking prefix ``40.40``. This keeps bad GPS data visible for
-    manual correction.
-    """
-    if not text:
-        return None, None
-
-    # First handle an explicit Coordinates line. Validate the entire pair so
-    # malformed decimal values are not silently truncated by a regex prefix.
-    coordinate_line = re.search(
-        r"^\s*Coordinates?\s*:?\s*(.+?)\s*$",
-        text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
-    if coordinate_line:
-        raw = coordinate_line.group(1).strip()
-        parts = re.split(r"\s*,\s*", raw)
-        if len(parts) >= 2:
-            lat_raw = parts[0].strip()
-            lon_raw = parts[1].strip()
-            number_pattern = r"^-?\d+(?:\.\d+)?$"
-            if re.fullmatch(number_pattern, lat_raw) and re.fullmatch(number_pattern, lon_raw):
-                return float(lat_raw), float(lon_raw)
-            # A malformed explicit coordinate pair must not fall through to
-            # the generic prefix-matching patterns below.
-            return None, None
-
+    # --------------------------------------------------------
     # latitude / longitude format
+    # --------------------------------------------------------
+
     lat_match = re.search(
-        r"\blat(?:itude)?\s*:?\s*(-?\d+(?:\.\d+)?)",
+        r"\blat(?:itude)?\s*:?\s*"
+        r"(-?\d+(?:\.\d+)?)",
+
         text,
-        re.IGNORECASE,
+        re.IGNORECASE
     )
+
     lon_match = re.search(
-        r"\blong(?:itude)?\s*:?\s*(-?\d+(?:\.\d+)?)",
+        r"\blong(?:itude)?\s*:?\s*"
+        r"(-?\d+(?:\.\d+)?)",
+
         text,
-        re.IGNORECASE,
+        re.IGNORECASE
     )
 
     if lat_match and lon_match:
-        return float(lat_match.group(1)), float(lon_match.group(1))
 
-    # Fallback for separate bare Coordinates + Long/Longitude formats.
-    if lon_match and not lat_match:
-        bare_lat_match = re.search(
-            r"^\s*Coordinates?\s*:?\s*(-?\d+\.\d+)\s*$",
-            text,
-            flags=re.IGNORECASE | re.MULTILINE,
+        return (
+            float(
+                lat_match.group(1)
+            ),
+            float(
+                lon_match.group(1)
+            )
         )
-        if bare_lat_match:
-            return float(bare_lat_match.group(1)), float(lon_match.group(1))
 
-    if lat_match and not lon_match:
-        bare_lon_match = re.search(
-            r"^\s*Coordinates?\s*:?\s*(-?\d+\.\d+)\s*$",
+    # --------------------------------------------------------
+    # Coordinates: lat, long
+    # --------------------------------------------------------
+
+    patterns = [
+
+        r"Coordinates\s*:?\s*"
+        r"(-?\d+(?:\.\d+)?)"
+        r"\s*,\s*"
+        r"(-?\d+(?:\.\d+)?)",
+
+        r"Coordinates\s*:?\s*"
+        r"(-?\d+(?:\.\d+)?)"
+        r"\s+"
+        r"(-?\d+(?:\.\d+)?)",
+
+        # Bare coordinate line
+        r"^\s*"
+        r"(-?\d+\.\d+)"
+        r"\s*,\s*"
+        r"(-?\d+\.\d+)\s*$"
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
             text,
-            flags=re.IGNORECASE | re.MULTILINE,
+            flags=(
+                re.IGNORECASE
+                | re.MULTILINE
+            )
         )
-        if bare_lon_match and bare_lon_match.group(1) != lat_match.group(1):
-            return float(lat_match.group(1)), float(bare_lon_match.group(1))
 
-    # Bare coordinate line without the Coordinates label.
-    bare_pair = re.search(
-        r"^\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*$",
-        text,
-        flags=re.MULTILINE,
-    )
-    if bare_pair:
-        return float(bare_pair.group(1)), float(bare_pair.group(2))
+        if match:
+
+            return (
+                float(
+                    match.group(1)
+                ),
+                float(
+                    match.group(2)
+                )
+            )
 
     return None, None
 
@@ -1202,31 +1258,30 @@ def parse_coordinates(text):
 # PLOT TYPE
 # ============================================================
 
-def extract_plot_type(plot_header, context_text=None, report_text=None):
-    """Determine plot type using plot-level text first, then session context.
+def extract_plot_type(
+    plot_header
+):
 
-    Existing behavior is preserved for explicit headers such as
-    ``Plot 2: Temporary Plot``. The new context fallback handles reports that
-    declare ``2.5m radius Temporary Plots establishment`` once for a Check or
-    session and then use plain ``Plot 1``, ``Plot 2`` headers.
-    """
-    header = plot_header or ""
-    if re.search(r"\btemporary\b", header, re.IGNORECASE):
-        return "Temporary"
+    if not plot_header:
 
-    context = context_text or ""
-    if re.search(r"\btemporary\s+plots?\b", context, re.IGNORECASE):
-        return "Temporary"
+        return "Monitoring Plot"
 
-    # Report-level establishment statement, normally before the first Check.
-    # Only use it when it explicitly says Temporary Plot(s), so unrelated
-    # uses of the word temporary are not promoted to a plot type.
-    if report_text and re.search(
-        r"(?:radius\s+)?temporary\s+plots?\s+establishment",
-        report_text,
-        re.IGNORECASE,
+    if re.search(
+        r"\btemporary\b",
+        plot_header,
+        re.IGNORECASE
     ):
+
         return "Temporary"
+
+
+    if re.search(
+        r"\bpermanent\b",
+        plot_header,
+        re.IGNORECASE
+    ):
+
+        return "Permanent"
 
     return "Monitoring Plot"
 
@@ -1278,11 +1333,17 @@ def extract_partner(text):
 # ============================================================
 
 def extract_alive_values(text):
-    """Extract replanted/old alive counts without counting natural regeneration.
+    """Extract alive trees into two independent groups.
 
-    Natural regeneration is a separate ecological category. Therefore an
-    ``Alive`` value occurring inside a ``Natural regeneration`` section is
-    NEVER added to replanted_alive, old_samplings_alive, or total_alive.
+    IMPORTANT DATA RULE:
+    - Natural regeneration is NOT replanted alive and is NEVER added to total_alive.
+    - Replanted/new planting alive is stored in ``re_planted_alive``.
+    - Explicit old-sampling alive is stored in ``old_samplings_alive``.
+    - ``total_alive`` is calculated only as:
+          re_planted_alive + old_samplings_alive
+
+    The key protection here is that an ``Alive:`` line inside a
+    ``Natural regeneration`` section must not be interpreted as replanted alive.
     """
     old_alive = 0
     new_alive = 0
@@ -1292,85 +1353,114 @@ def extract_alive_values(text):
     lines = text.splitlines()
     in_natural_regen = False
 
+    # A new normal field ends a natural-regeneration subsection.
     natural_start = re.compile(
-        r"^\s*(?:Natural\s+regeneration|Natural\s+regeneration\s*:|Natural)\b",
-        re.IGNORECASE
+        r'^\s*(?:Natural\s+regeneration|Natural\s+regeneration\s+trees?)\b',
+        re.IGNORECASE,
     )
-    natural_end = re.compile(
-        r"^\s*(?:Coordinates?|Spacing|Disturbances?|Cause\s+mortality|Survival\s+rate|Zonation|Zone|Plot\b|Check\b|Recommendation|Observation|$)",
-        re.IGNORECASE
+    section_end = re.compile(
+        r'^\s*(?:Coordinates?|Spacing|Disturbances?|Cause\s+mortality|'
+        r'Survival\s+rate|Zonation|Zone|Plot\b|Check\b|Monitoring\b|'
+        r'Tree\s+species|Trees\s+species|Species\s+planted|Planting\s+date|'
+        r'Date\s+planted|Session\s+ID|Planting\s+ID|ID\s*:|Area\b|'
+        r'Total\s+planted|No\.?\s*planted|Observation|Recommendation)\b',
+        re.IGNORECASE,
     )
 
     for raw_line in lines:
         line = raw_line.strip()
+        if not line:
+            continue
 
         if natural_start.match(line):
             in_natural_regen = True
             continue
 
-        if in_natural_regen and natural_end.match(line):
-            in_natural_regen = False
-
         if in_natural_regen:
-            continue
+            # Keep natural-regeneration Alive/Dead/etc. completely outside
+            # the replanted/old-sampling counters.
+            if section_end.match(line):
+                in_natural_regen = False
+            else:
+                continue
 
-        match = re.match(r"^Old\s*:?\s*([\d,]+)", line, re.IGNORECASE)
-        if match:
-            old_alive += int(match.group(1).replace(",", ""))
+        # Explicit old-sampling labels.
+        m = re.match(
+            r'^\s*(?:Old(?:\s+samplings?)?|Old\s+sampling)\s*:?[ \t]*(\d[\d,]*)',
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            old_alive += int(m.group(1).replace(',', ''))
             old_found = True
             continue
 
-        match = re.match(r"^New\s*:?\s*([\d,]+)", line, re.IGNORECASE)
-        if match:
-            new_alive += int(match.group(1).replace(",", ""))
+        # Explicit new/replanted labels.
+        m = re.match(
+            r'^\s*(?:New|Replanted)\s*:?[ \t]*(\d[\d,]*)',
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            new_alive += int(m.group(1).replace(',', ''))
             new_found = True
             continue
 
-        match = re.match(r"^Alive\s*:?\s*(.+)$", line, re.IGNORECASE)
-        if match:
-            value_text = match.group(1)
+        # Alive lines outside Natural regeneration.
+        m = re.match(
+            r'^\s*Alive\s*:?[ \t]*(.+)$',
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            value_text = m.group(1)
 
             explicit_old = re.findall(
-                r"(\d[\d,]*)\s*(?:old|older)",
+                r'(\d[\d,]*)\s*(?:old|older)',
                 value_text,
-                re.IGNORECASE
+                flags=re.IGNORECASE,
             )
             explicit_new = re.findall(
-                r"(\d[\d,]*)\s*(?:new|replanted)",
+                r'(\d[\d,]*)\s*(?:new|replanted)',
                 value_text,
-                re.IGNORECASE
+                flags=re.IGNORECASE,
             )
 
             for value in explicit_old:
-                old_alive += int(value.replace(",", ""))
+                old_alive += int(value.replace(',', ''))
                 old_found = True
 
             for value in explicit_new:
-                new_alive += int(value.replace(",", ""))
+                new_alive += int(value.replace(',', ''))
                 new_found = True
 
             if not explicit_old and not explicit_new:
-                # Plain Alive: 0 is a legitimate observation.
-                numbers = re.findall(r"\d[\d,]*", value_text)
+                # Plain Alive: N is replanted alive.
+                before_equal = (
+                    value_text.split('=', 1)[0]
+                    if '=' in value_text
+                    else value_text
+                )
+                numbers = re.findall(r'\d[\d,]*', before_equal)
                 if numbers:
                     new_alive += sum(
-                        int(v.replace(",", "")) for v in numbers
+                        int(v.replace(',', '')) for v in numbers
                     )
                     new_found = True
 
-    # Total live trees / Total alive are only fallbacks when no explicit
-    # Alive/Old/New values were found.
+    # Total live trees / Total alive are replanted alive only when no
+    # explicit alive components have already been found.
     if not old_found and not new_found:
         for pattern in [
-            r"^\s*Total\s+live\s+trees\s*:?\s*([\d,]+)",
-            r"^\s*Total\s+alive\s*:?\s*([\d,]+)",
+            r'^\s*Total\s+live\s+trees\s*:?\s*(\d[\d,]*)',
+            r'^\s*Total\s+alive\s*:?\s*(\d[\d,]*)',
         ]:
             for value in re.findall(
                 pattern,
                 text,
-                flags=re.IGNORECASE | re.MULTILINE
+                flags=re.IGNORECASE | re.MULTILINE,
             ):
-                new_alive = int(value.replace(",", ""))
+                new_alive = int(value.replace(',', ''))
                 new_found = True
                 break
             if new_found:
@@ -1378,7 +1468,7 @@ def extract_alive_values(text):
 
     return (
         new_alive if new_found else None,
-        old_alive if old_found else None
+        old_alive if old_found else None,
     )
 
 
@@ -1455,7 +1545,7 @@ def extract_dormant(text):
     for value in matches:
 
         numbers = re.findall(
-            r"\d[\d,]*(?:\.\d+)?",
+            r"\d[\d,]*",
             value
         )
 
@@ -1468,7 +1558,9 @@ def extract_dormant(text):
         return None
 
     return sum(
-        float(x.replace(",", ""))
+        int(
+            x.replace(",", "")
+        )
         for x in values
     )
 
@@ -1513,59 +1605,131 @@ def extract_natural_regeneration(text):
 # ============================================================
 
 def split_into_planting_blocks(text):
-    """Legacy helper retained for compatibility.
+    """Split a report into monitoring/planting groups.
 
-    The main parser now works plot-by-plot because WhatsApp reports can put
-    the Monitoring/Session ID line either before or after the Plot header.
+    The important improvement is that a monitoring group does NOT have to
+    contain the word 'planting'. Real reports use:
+      Monitoring of 28th Feb 2025 (ID:9747)
+      Monitoring of 25th March 2025 (ID:9960)
+      Monitoring May 2026 planting
+      Monitoring of 11th December 2024 planting
     """
-    return []
+    monitoring_line = (
+        r"^\s*(?:\d+[\.\)]\s*)?"
+        r"Monitoring\b.*$"
+    )
+    # Some reports place the plot header BEFORE the monitoring line, e.g.
+    # "Plot 1:Temporary plot" followed by "Monitoring of 28th Feb 2025...".
+    # In that structure, let parse_report use the plot-level fallback so the
+    # plot header is never lost.
+    first_monitoring = re.search(monitoring_line, text, flags=re.IGNORECASE | re.MULTILINE)
+    first_plot = re.search(
+        r"^\s*(?:Plot\s*:?\s*\d+|Temporary\s+Plot\s*:?\s*\d+)",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    if first_plot and first_monitoring and first_plot.start() < first_monitoring.start():
+        return []
+
+    sections = re.split(
+        rf"(?={monitoring_line})",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    blocks = []
+    block_start = re.compile(
+        r"^\s*(?:\d+[\.\)]\s*)?Monitoring\b",
+        flags=re.IGNORECASE,
+    )
+    for section in sections:
+        section = section.strip()
+        if section and block_start.match(section):
+            blocks.append(section)
+    if blocks:
+        return blocks
+
+    # Fallback for reports without a Monitoring line.
+    id_pattern = (
+        r"(?=^\s*(?:"
+        r"Planting\s+ID|Planted\s+Session\s+ID|Session\s+ID|ID"
+        r")\s*:?\s*\d+)"
+    )
+    sections = re.split(id_pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+    blocks = []
+    for section in sections:
+        section = section.strip()
+        if re.match(
+            r"^(?:Planting\s+ID|Planted\s+Session\s+ID|Session\s+ID|ID)\s*:?\s*\d+",
+            section,
+            flags=re.IGNORECASE,
+        ):
+            blocks.append(section)
+    return blocks
 
 
 # ============================================================
-# SPLIT PLOTS - ROBUST PLOT-BY-PLOT PARSER
+# SPLIT PLOTS
 # ============================================================
 
 def split_into_plots(text):
-    """Split a report into plot sections without crossing Check/Session boundaries.
+    """Split monitoring blocks into Plot records.
 
-    The previous parser ended a plot only at the next Plot header. In reports
-    where the next session's metadata appears between Plot 3 and the next Plot
-    1, that metadata became part of Plot 3. We now stop a plot at the earliest
-    of the next Plot header, next Check header, or next Session header.
+    Handles all of these:
+      Plot 1
+      Plot 1:
+      Plot 1: Temporary plot
+      Plot 1:Temporary plot
+      Plot 1:Temporary
+      Temporary Plot 1
+      Plot 3:Temporary plot Monitoring ...
     """
-    anchor = re.compile(
-        r"^\s*(?:Plot\s*:??\s*|Temporary\s+Plot\s*:??\s*)(\d+)\s*:?[ \t]*(.*)$",
-        flags=re.IGNORECASE | re.MULTILINE,
+    # Colon AFTER the plot number is explicitly allowed.
+    header = (
+        r"^\s*(?:"
+        r"Plot\s*:??\s*\d+"
+        r"|"
+        r"Temporary\s+Plot\s*:??\s*\d+"
+        r")"
+        r"\s*:?[ \t].*$|^\s*(?:"
+        r"Plot\s*:??\s*\d+"
+        r"|"
+        r"Temporary\s+Plot\s*:??\s*\d+"
+        r")\s*:?[ \t]*$"
     )
-    boundary = re.compile(
-        r"^\s*(?:Check\s*\d+\b|Session\s*\d+\b|Session\s*:\s*\d+\b).*?$",
-        flags=re.IGNORECASE | re.MULTILINE,
+    # Simpler, robust split anchor: Plot/Temporary Plot + number, then optional colon.
+    split_anchor = (
+        r"(?=^\s*(?:"
+        r"Plot\s*:?\s*\d+"
+        r"|"
+        r"Temporary\s+Plot\s*:?\s*\d+"
+        r")\s*:?)"
     )
-
-    matches = list(anchor.finditer(text))
-    boundaries = list(boundary.finditer(text))
+    sections = re.split(split_anchor, text, flags=re.IGNORECASE | re.MULTILINE)
     plots = []
-
-    for i, match in enumerate(matches):
-        start_pos = match.start()
-        next_plot_pos = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-
-        next_boundary_pos = len(text)
-        for b in boundaries:
-            if b.start() > start_pos and b.start() < next_boundary_pos:
-                next_boundary_pos = b.start()
-
-        end_pos = min(next_plot_pos, next_boundary_pos)
-        section = text[start_pos:end_pos].strip()
-        header = match.group(2).strip() or None
+    for section in sections:
+        section = section.strip()
+        if not section:
+            continue
+        match = re.match(
+            r"^(?:"
+            r"Plot\s*:?\s*"
+            r"|"
+            r"Temporary\s+Plot\s*:?\s*"
+            r")"
+            r"(\d+)\s*:?[ \t]*(.*)$",
+            section,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            continue
+        plot_number = int(match.group(1))
+        remainder = match.group(2)
+        first_line = remainder.split("\n", 1)[0].strip()
         plots.append({
-            "plot_number": int(match.group(1)),
-            "plot_header": header,
+            "plot_number": plot_number,
+            "plot_header": first_line or None,
             "plot_text": section,
-            "start": start_pos,
-            "end": end_pos,
         })
-
     return plots
 
 
@@ -1651,110 +1815,392 @@ def create_record(
     plot_header,
     general_info,
     block_info,
-    check_number,
-    context_text="",
-    session_number=None,
-    report_text="",
-    session_observations=None
+    check_number
 ):
-    """Create one monitoring-plot record.
 
-    IMPORTANT extraction priority:
-    1. Plot-level text (the current plot)
-    2. Surrounding Check/context information
+    row = {
+        column: None
+        for column in COLUMNS
+    }
 
-    This prevents Kuchi-style reports from inheriting the previous
-    plot's planting date/session ID when several planting sessions
-    occur in the same Check.
-    """
+    # --------------------------------------------------------
+    # GENERAL
+    # --------------------------------------------------------
 
-    row = {column: None for column in COLUMNS}
+    row["County"] = (
+        general_info["county"]
+    )
 
-    row["County"] = general_info["county"]
-    row["planting_site"] = general_info["site"]
-    row["ecosystem type"] = general_info["forest_type"]
-    row["monitoring_date"] = general_info["monitoring_date"]
+    # Country is kept as a separate report-level field.
+    row["Country"] = (
+        general_info.get("country")
+    )
+
+    row["planting_site"] = (
+        general_info["site"]
+    )
+
+    row["ecosystem type"] = (
+        general_info["forest_type"]
+    )
+
+    row["monitoring_date"] = (
+        general_info["monitoring_date"]
+    )
 
     if row["monitoring_date"]:
-        row["monitoring_month"] = row["monitoring_date"].strftime("%B")
-        row["monitoring_year"] = row["monitoring_date"].year
 
-    # The Kuchi structure puts CHECK 1 / CHECK 4 on the Plot header.
-    # Prefer that plot-level value when present; otherwise use the
-    # surrounding Check context.
-    plot_check = extract_check_number(plot_header or "")
-    row["Check"] = plot_check if plot_check is not None else check_number
-    row["plot_number"] = plot_number
-    row["type_of_plot"] = extract_plot_type(
-        plot_header,
-        context_text=context_text,
-        report_text=report_text
+        row["monitoring_month"] = (
+            row["monitoring_date"]
+            .strftime("%B")
+        )
+
+        row["monitoring_year"] = (
+            row["monitoring_date"]
+            .year
+        )
+
+    # --------------------------------------------------------
+    # CHECK
+    # --------------------------------------------------------
+
+    row["Check"] = (
+        check_number
     )
-    row["partner"] = extract_partner(plot_text) or extract_partner(block_info.get("context_text", ""))
 
     # --------------------------------------------------------
-    # PLOT-LEVEL FIRST, CONTEXT SECOND
+    # PLOT
     # --------------------------------------------------------
-    def plot_first(extractor, key):
-        value = extractor(plot_text)
-        if value is None or value == "":
-            value = block_info.get(key)
-        return value
 
-    row["planting_id"] = plot_first(extract_planting_id, "planting_id")
-    row["planting_date"] = plot_first(extract_planting_date, "planting_date")
+    row["plot_number"] = (
+        plot_number
+    )
 
-    species, material = extract_species_and_material(plot_text)
+    row["type_of_plot"] = (
+        extract_plot_type(
+            plot_header
+        )
+    )
+
+    row["partner"] = (
+        extract_partner(
+            plot_text
+        )
+    )
+
+    # --------------------------------------------------------
+    # PLANTING ID
+    # --------------------------------------------------------
+
+    planting_id = (
+        block_info.get(
+            "planting_id"
+        )
+    )
+
+    if planting_id is None:
+
+        planting_id = (
+            extract_planting_id(
+                plot_text
+            )
+        )
+
+    row["planting_id"] = (
+        planting_id
+    )
+
+    # --------------------------------------------------------
+    # PLANTING DATE
+    # --------------------------------------------------------
+
+    planting_date = (
+        block_info.get(
+            "planting_date"
+        )
+    )
+
+    if planting_date is None:
+
+        planting_date = (
+            extract_planting_date(
+                plot_text
+            )
+        )
+
+    row["planting_date"] = (
+        planting_date
+    )
+
+    # --------------------------------------------------------
+    # SPECIES
+    # --------------------------------------------------------
+
+    species, material = (
+        extract_species_and_material(
+            plot_text
+        )
+    )
+
     if species is None:
-        species = block_info.get("species")
+
+        species = (
+            block_info.get(
+                "species"
+            )
+        )
+
     if material is None:
-        material = extract_planting_material(plot_text)
+
+        material = (
+            extract_planting_material(
+                plot_text
+            )
+        )
+
     if material is None:
-        material = block_info.get("planting_materials")
 
-    row["species_planted"] = species
-    row["planting_materials"] = material
+        material = (
+            block_info.get(
+                "planting_materials"
+            )
+        )
 
-    row["total_planted"] = plot_first(extract_total_planted, "total_planted")
-    row["area_restored_ha"] = plot_first(extract_area, "area")
-    row["zonation"] = plot_first(extract_zonation, "zonation")
-    row["spacing_m"] = plot_first(extract_spacing, "spacing")
-    row["Disturbance"] = plot_first(extract_disturbance, "disturbance")
-
-    latitude, longitude = parse_coordinates(plot_text)
-    row["latitude"] = latitude
-    row["longitude"] = longitude
-
-    replanted_alive, old_alive = extract_alive_values(plot_text)
-    row["re_planted_alive"] = replanted_alive
-    row["old_samplings_alive"] = old_alive
-
-    # Natural regeneration is independent. It NEVER contributes to total_alive.
-    components = []
-    if replanted_alive is not None:
-        components.append(replanted_alive)
-    if old_alive is not None:
-        components.append(old_alive)
-    if components:
-        row["total_alive"] = sum(components)
-
-    row["dead"] = extract_dead(plot_text)
-    row["dormant"] = extract_dormant(plot_text)
-    row["natural_regenation"] = extract_natural_regeneration(plot_text)
-    row["trees_age"] = calculate_age_years(
-        row["planting_date"],
-        row["monitoring_date"]
+    row["species_planted"] = (
+        species
     )
-    row["Recommendation"] = general_info["recommendation"]
 
-    # Prefer a session/check-specific observation when the report explicitly
-    # labels it (e.g. "1st session ..." / "Session 2 ..."). Otherwise keep
-    # the existing report-level observation behavior.
-    observation_key = session_number if session_number in (session_observations or {}) else check_number
-    if session_observations and observation_key in session_observations:
-        row["Comment"] = session_observations[observation_key]
-    else:
-        row["Comment"] = general_info["observation"]
+    row["planting_materials"] = (
+        material
+    )
+
+    # --------------------------------------------------------
+    # TOTAL PLANTED
+    # --------------------------------------------------------
+
+    total_planted = (
+        extract_total_planted(
+            plot_text
+        )
+    )
+
+    if total_planted is None:
+
+        total_planted = (
+            block_info.get(
+                "total_planted"
+            )
+        )
+
+    row["total_planted"] = (
+        total_planted
+    )
+
+    # --------------------------------------------------------
+    # AREA
+    # --------------------------------------------------------
+
+    area = extract_area(
+        plot_text
+    )
+
+    if area is None:
+
+        area = (
+            block_info.get(
+                "area"
+            )
+        )
+
+    row["area_restored_ha"] = (
+        area
+    )
+
+    # --------------------------------------------------------
+    # ZONATION
+    # --------------------------------------------------------
+
+    zonation = extract_zonation(
+        plot_text
+    )
+
+    if zonation is None:
+
+        zonation = (
+            block_info.get(
+                "zonation"
+            )
+        )
+
+    row["zonation"] = (
+        zonation
+    )
+
+    # --------------------------------------------------------
+    # SPACING
+    # --------------------------------------------------------
+
+    spacing = extract_spacing(
+        plot_text
+    )
+
+    if spacing is None:
+
+        spacing = (
+            block_info.get(
+                "spacing"
+            )
+        )
+
+    row["spacing_m"] = (
+        spacing
+    )
+
+    # --------------------------------------------------------
+    # DISTURBANCE
+    # --------------------------------------------------------
+
+    disturbance = extract_disturbance(
+        plot_text
+    )
+
+    if disturbance is None:
+
+        disturbance = (
+            block_info.get(
+                "disturbance"
+            )
+        )
+
+    row["Disturbance"] = (
+        disturbance
+    )
+
+    # --------------------------------------------------------
+    # COORDINATES
+    # --------------------------------------------------------
+
+    latitude, longitude = (
+        parse_coordinates(
+            plot_text
+        )
+    )
+
+    row["latitude"] = (
+        latitude
+    )
+
+    row["longitude"] = (
+        longitude
+    )
+
+    # --------------------------------------------------------
+    # ALIVE
+    # --------------------------------------------------------
+
+    (
+        replanted_alive,
+        old_alive
+    ) = extract_alive_values(
+        plot_text
+    )
+
+    row["re_planted_alive"] = (
+        replanted_alive
+    )
+
+    row["old_samplings_alive"] = (
+        old_alive
+    )
+
+    # --------------------------------------------------------
+    # TOTAL ALIVE
+    #
+    # ALWAYS:
+    #
+    # Replanted Alive + Old Samplings Alive
+    # --------------------------------------------------------
+
+    components = []
+
+    if replanted_alive is not None:
+
+        components.append(
+            replanted_alive
+        )
+
+    if old_alive is not None:
+
+        components.append(
+            old_alive
+        )
+
+    if components:
+
+        row["total_alive"] = sum(
+            components
+        )
+
+    # --------------------------------------------------------
+    # DEAD
+    # --------------------------------------------------------
+
+    row["dead"] = (
+        extract_dead(
+            plot_text
+        )
+    )
+
+    # --------------------------------------------------------
+    # DORMANT
+    # --------------------------------------------------------
+
+    row["dormant"] = (
+        extract_dormant(
+            plot_text
+        )
+    )
+
+    # --------------------------------------------------------
+    # NATURAL REGENERATION
+    # --------------------------------------------------------
+
+    row["natural_regenation"] = (
+        extract_natural_regeneration(
+            plot_text
+        )
+    )
+
+    # --------------------------------------------------------
+    # TREE AGE
+    # --------------------------------------------------------
+
+    row["trees_age"] = (
+        calculate_age_years(
+            row["planting_date"],
+            row["monitoring_date"]
+        )
+    )
+
+    # --------------------------------------------------------
+    # RECOMMENDATION
+    # --------------------------------------------------------
+
+    row["Recommendation"] = (
+        general_info[
+            "recommendation"
+        ]
+    )
+
+    # --------------------------------------------------------
+    # COMMENT
+    # --------------------------------------------------------
+
+    row["Comment"] = (
+        general_info[
+            "observation"
+        ]
+    )
 
     return row
 
@@ -1763,136 +2209,218 @@ def create_record(
 # PARSE ONE REPORT
 # ============================================================
 
-def _find_previous_context(text, position):
-    """Return only the metadata immediately preceding this plot.
-
-    Used for old reports where planting metadata is before Plot 1.
-    The context begins at the latest Monitoring line, or latest Check line.
-    """
-    before = text[:position]
-    monitoring_matches = list(re.finditer(
-        r"^\s*(?:\d+[.)]\s*)?Monitoring\b.*$",
-        before, flags=re.IGNORECASE | re.MULTILINE
-    ))
-    if monitoring_matches:
-        return before[monitoring_matches[-1].start():]
-
-    check_matches = list(re.finditer(
-        r"^\s*Check\s*\d+\b.*$",
-        before, flags=re.IGNORECASE | re.MULTILINE
-    ))
-    return before[check_matches[-1].start():] if check_matches else ""
-
-
-def _extract_check_from_anywhere(text):
-    match = re.search(r"\bCheck\s*(\d+)\b", text or "", flags=re.IGNORECASE)
-    if match:
-        return int(match.group(1))
-    return extract_check_number(text)
-
-
-def _merge_block_info(primary, fallback):
-    """Fill only genuinely missing metadata; never overwrite plot-local data."""
-    merged = dict(primary or {})
-    for key in [
-        "planting_id", "planting_date", "species", "planting_materials",
-        "total_planted", "area", "zonation", "spacing", "disturbance"
-    ]:
-        if merged.get(key) is None and fallback:
-            merged[key] = fallback.get(key)
-    return merged
-
-
-def _metadata_for_plot(text, plot):
-    """Resolve planting metadata for one plot without cross-contamination.
-
-    Kuchi rule:
-      Plot 1-4 -> 11 Feb / 18194
-      Plot 5   -> 16 Feb / 18272
-      Plot 6-8 -> 18 Feb / 18354
-      Plot 9-10-> 31 Jul 2023 / 848
-
-    The plot's own section always wins. Previous context is used only when a
-    field is absent, which preserves Kadzuhoni/Chara and earlier formats.
-    """
-    plot_text = plot["plot_text"]
-    local = extract_block_information(plot_text)
-
-    # If the plot itself has its own Monitoring line, do NOT use a preceding
-    # monitoring block for any field already extracted locally.
-    previous = _find_previous_context(text, plot["start"])
-    if previous:
-        fallback = extract_block_information(previous)
-        local = _merge_block_info(local, fallback)
-
-    return local
-
 def parse_report(text):
-    """Parse a WhatsApp report into one row per monitoring plot.
+    """Parse one complete WhatsApp report plot-by-plot.
 
-    Maintains the existing plot-first extraction strategy while making the
-    context explicitly Check/Session aware. Plot-local information always wins;
-    context only fills missing fields.
+    IMPORTANT DESIGN:
+    We do NOT split the report first on ``Monitoring`` lines.  That approach
+    fails when several planting sessions occur under one Check, because a
+    later plot can inherit the first session's date/ID.
+
+    Instead:
+      1. Split the complete report into actual Plot sections.
+      2. For each plot, use information inside that plot first.
+      3. If planting-level fields are missing, inherit them from the nearest
+         preceding planting/session context (ID/Session/Planting ID or
+         Monitoring line), bounded by the current Check.
+
+    This preserves older formats while correctly handling Kuchi-style reports
+    where every plot may repeat its own Monitoring date and Session ID.
     """
     text = clean_text(text)
     general_info = extract_general_information(text)
-    session_observations = extract_session_observations(text)
     rows = []
 
+    # --------------------------------------------------------
+    # Locate all Check headers with positions.
+    # --------------------------------------------------------
     check_matches = list(re.finditer(
-        r"^\s*Check\s*(\d+).*?$",
-        text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    ))
-    session_matches = list(re.finditer(
-        r"^\s*Session\s*(\d+)\b.*?$",
+        r"^\s*Check\s*(\d+).*$",
         text,
         flags=re.IGNORECASE | re.MULTILINE,
     ))
 
-    plots = split_into_plots(text)
-    if not plots:
+    # --------------------------------------------------------
+    # Locate ALL plot sections in the original report.
+    # --------------------------------------------------------
+    plot_anchor = re.compile(
+        r"^\s*(?:Plot\s*:??\s*|Temporary\s+Plot\s*:??\s*)"
+        r"(\d+)\s*:?[ \t]*(.*)$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    plot_matches = list(plot_anchor.finditer(text))
+
+    if not plot_matches:
         return pd.DataFrame(columns=COLUMNS)
 
-    def context_for_position(position):
-        """Return metadata before the plot within its current Check."""
-        context_start = 0
-        current_check = None
+    # --------------------------------------------------------
+    # Planting/session markers.
+    # These are used ONLY as context boundaries. Actual extraction is always
+    # performed from the plot first.
+    # --------------------------------------------------------
+    session_marker = re.compile(
+        r"^\s*(?:"
+        r"Planting\s+ID|"
+        r"Planted\s+Session\s+ID|"
+        r"Session\s+ID|"
+        r"ID"
+        r")\s*:?[ \t]*\d+",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    monitoring_marker = re.compile(
+        r"^\s*(?:\d+[\.)]\s*)?Monitoring\b.*$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    # Combine session and monitoring markers in source order.
+    context_markers = []
+    for m in session_marker.finditer(text):
+        context_markers.append((m.start(), "session"))
+    for m in monitoring_marker.finditer(text):
+        context_markers.append((m.start(), "monitoring"))
+    context_markers.sort(key=lambda x: x[0])
+
+    def current_check_for_position(position):
+        current = None
         for match in check_matches:
             if match.start() <= position:
-                context_start = match.start()
-                current_check = int(match.group(1))
+                current = int(match.group(1))
             else:
                 break
+        return current
 
-        current_session = None
-        for match in session_matches:
-            if match.start() <= position:
-                current_session = int(match.group(1))
+    def previous_check_start(position):
+        starts = [m.start() for m in check_matches if m.start() <= position]
+        return max(starts) if starts else 0
+
+    def next_check_start(position):
+        for match in check_matches:
+            if match.start() > position:
+                return match.start()
+        return len(text)
+
+    def context_for_plot(plot_start):
+        """Return the best preceding planting/session context for a plot."""
+        check_start = previous_check_start(plot_start)
+        check_end = next_check_start(plot_start)
+
+        markers = [
+            (pos, kind)
+            for pos, kind in context_markers
+            if check_start <= pos <= plot_start and pos < check_end
+        ]
+
+        session_positions = [pos for pos, kind in markers if kind == "session"]
+        monitoring_positions = [pos for pos, kind in markers if kind == "monitoring"]
+
+        if session_positions:
+            latest_session = max(session_positions)
+
+            # If a Monitoring line occurs after the latest session marker,
+            # that monitoring line belongs to the same planting session.
+            # Example: Monitoring ... -> Session ID -> Plot.
+            monitoring_after_session = [
+                pos for pos in monitoring_positions
+                if latest_session <= pos <= plot_start
+            ]
+
+            if monitoring_after_session:
+                context_start = max(monitoring_after_session)
             else:
-                break
+                # Example: Monitoring ... -> Session ID -> Plot, where the
+                # monitoring date is before the ID. Keep the monitoring line
+                # as well as the ID so planting_date is not lost.
+                previous_monitoring = [
+                    pos for pos in monitoring_positions
+                    if pos < latest_session
+                ]
 
-        return text[context_start:position], current_check, current_session
+                if previous_monitoring:
+                    # Use the most recent monitoring line, but only if there
+                    # was no newer session marker after it. This correctly
+                    # pairs Rabai's Monitoring date with its Session ID.
+                    context_start = max(previous_monitoring)
+                else:
+                    context_start = latest_session
+        elif monitoring_positions:
+            context_start = max(monitoring_positions)
+        else:
+            # If no explicit session marker precedes the plot, the Check-level
+            # context can still contain Planting ID / Total planted fields.
+            context_start = check_start
 
-    for plot in plots:
-        plot_text = plot["plot_text"]
-        plot_position = plot["start"]
-        context_text, current_check, current_session = context_for_position(plot_position)
+        return text[context_start:check_end]
 
+    # --------------------------------------------------------
+    # Build each plot independently.
+    # --------------------------------------------------------
+    for i, match in enumerate(plot_matches):
+        plot_start = match.start()
+
+        # A new Monitoring line can occur between two Plot headers when the
+        # report starts a new planting session. Do not allow that next session
+        # header to become part of the previous plot's text.
+        next_plot_start = (
+            plot_matches[i + 1].start()
+            if i + 1 < len(plot_matches)
+            else len(text)
+        )
+
+        next_monitoring_positions = [
+            m.start()
+            for m in monitoring_marker.finditer(text)
+            if plot_start < m.start() < next_plot_start
+        ]
+
+        # A Monitoring line before the next Plot is a session boundary.
+        # A Monitoring line belonging to the current plot would normally be
+        # before its first observation and is therefore handled by this test:
+        # if it appears after the plot header, it is still kept because the
+        # current plot begins with its own header. Only the LAST monitoring
+        # before the next plot is a boundary when there is no plot content
+        # after it. In practice, reports such as Rabai/Chara put the next
+        # session Monitoring after the preceding plot's observations.
+        plot_end = next_plot_start
+        if next_monitoring_positions:
+            first_monitoring_after_plot = next_monitoring_positions[0]
+            # Treat it as a boundary if it occurs after a coordinate/observation
+            # field in the current plot. This avoids cutting Kuchi-style plots
+            # that begin with Monitoring immediately after their Plot header.
+            prefix = text[plot_start:first_monitoring_after_plot]
+            if re.search(
+                r'^\s*(?:Coordinates?|Alive|Dead|Dormant|Species|Tree\s+Species|Trees\s+species)',
+                prefix,
+                flags=re.IGNORECASE | re.MULTILINE,
+            ):
+                plot_end = first_monitoring_after_plot
+
+        plot_text = text[plot_start:plot_end].strip()
+        plot_number = int(match.group(1))
+        plot_header = match.group(2).strip() or None
+
+        current_check = current_check_for_position(plot_start)
+        context_text = context_for_plot(plot_start)
+
+        # Plot data always has priority. Context only fills missing fields.
+        plot_info = extract_block_information(plot_text)
         context_info = extract_block_information(context_text)
-        context_info["context_text"] = context_text
 
+        merged_info = dict(context_info)
+        for key, value in plot_info.items():
+            if value is not None:
+                merged_info[key] = value
+
+        # If the plot itself contains no planting ID/date but the session
+        # context does, the context is inherited. This is what Chara-style
+        # reports require. Kuchi-style repeated fields remain plot-specific.
         row = create_record(
-            plot_text=plot_text,
-            plot_number=plot["plot_number"],
-            plot_header=plot["plot_header"],
-            general_info=general_info,
-            block_info=context_info,
-            check_number=current_check,
-            session_number=current_session,
-            context_text=context_text,
-            report_text=text,
-            session_observations=session_observations,
+            plot_text,
+            plot_number,
+            plot_header,
+            general_info,
+            merged_info,
+            current_check,
         )
         rows.append(row)
 
@@ -2108,9 +2636,6 @@ with st.sidebar:
   are kept together even when the ID line appears
   after them in the report.
 - Planting information is inherited by plots.
-- Session/Check-level "Temporary Plots establishment" is inherited by plots that do not explicitly state their plot type.
-- Plot sections stop at the next Check/Session boundary to prevent metadata from leaking into the previous plot.
-- Malformed coordinate pairs are not silently truncated; invalid pairs are left blank for correction.
 - `Alive` alone = **Replanted Alive**.
 - `Total live trees` alone = **Replanted Alive**.
 - `Total alive` alone = **Replanted Alive**.
@@ -2340,7 +2865,7 @@ st.subheader(
     "Monitoring Summary"
 )
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1, k2, k3, k4 = st.columns(4)
 
 
 k1.metric(
@@ -2387,59 +2912,11 @@ k4.metric(
 )
 
 
-coordinates = (
-    filtered_df[
-        [
-            "latitude",
-            "longitude"
-        ]
-    ]
-    .notna()
-    .all(axis=1)
-    .sum()
-)
-
-k5.metric(
-    "Coordinates",
-    coordinates
-)
-
-
-species_count = (
-    filtered_df[
-        "species_planted"
-    ]
-    .dropna()
-    .nunique()
-)
-
-k6.metric(
-    "Species Entries",
-    species_count
-)
-
-
 # ============================================================
 # SECOND KPI ROW
 # ============================================================
 
-k7, k8, k9, k10, k11, k12 = st.columns(6)
-
-
-total_planted = (
-    pd.to_numeric(
-        filtered_df[
-            "total_planted"
-        ],
-        errors="coerce"
-    )
-    .sum()
-)
-
-k7.metric(
-    "Trees Planted",
-    f"{total_planted:,.0f}"
-)
+k7, k8, k9, k10 = st.columns(4)
 
 
 total_alive = (
@@ -2452,7 +2929,7 @@ total_alive = (
     .sum()
 )
 
-k8.metric(
+k7.metric(
     "Total Alive",
     f"{total_alive:,.0f}"
 )
@@ -2468,7 +2945,7 @@ total_dead = (
     .sum()
 )
 
-k9.metric(
+k8.metric(
     "Dead",
     f"{total_dead:,.0f}"
 )
@@ -2484,7 +2961,7 @@ total_dormant = (
     .sum()
 )
 
-k10.metric(
+k9.metric(
     "Dormant",
     f"{total_dormant:,.0f}"
 )
@@ -2520,35 +2997,9 @@ area_total = (
     .sum()
 )
 
-k11.metric(
+k10.metric(
     "Area (ha)",
     f"{area_total:,.3f}"
-)
-
-
-avg_age = (
-    pd.to_numeric(
-        filtered_df[
-            "trees_age"
-        ],
-        errors="coerce"
-    )
-    .mean()
-)
-
-if pd.isna(avg_age):
-
-    age_display = "N/A"
-
-else:
-
-    age_display = (
-        f"{avg_age:.0f} yrs"
-    )
-
-k12.metric(
-    "Average Tree Age",
-    age_display
 )
 
 
